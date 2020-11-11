@@ -1,0 +1,260 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: This stack is used to provision the VPC and security group for web application stack.
+
+Resources:
+  webvpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 172.31.0.0/22
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: webvpc
+  sgalb:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: sg for public alb
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      VpcId:
+        !Ref webvpc
+      Tags: 
+        - Key: Name
+          Value: sg-alb
+  sgwebserver:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: sg for web instance
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref sgalb
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref sgalb
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+      VpcId:
+        !Ref webvpc
+      Tags: 
+        - Key: Name
+          Value: sg-webserver
+  sgdb:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: sg for DB instance
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref sgwebserver
+      VpcId:
+        !Ref webvpc
+      Tags: 
+        - Key: Name
+          Value: sg-db
+  sgelasticache:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: sg for elastic cache instance
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 11211
+          ToPort: 11211
+          SourceSecurityGroupId: !Ref sgwebserver
+      VpcId:
+        !Ref webvpc
+      Tags: 
+        - Key: Name
+          Value: sg-elasticache
+  WebSubnet0:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: "us-west-2a"
+      CidrBlock: 172.31.0.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: WebSubnet0-private
+      VpcId: !Ref webvpc
+  WebSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: "us-west-2b"
+      CidrBlock: 172.31.1.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: WebSubnet1-private
+      VpcId: !Ref webvpc
+
+  WebSubnetRouteTableAssociation0:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref NatRouteTable0
+      SubnetId: !Ref WebSubnet0
+  WebSubnetRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref NatRouteTable1
+      SubnetId: !Ref WebSubnet1
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join [ '', [ 'InternetGateway / ', !Ref 'AWS::StackName' ] ]
+  AttachInternetGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref webvpc
+
+  NatEIP0:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: !Ref webvpc
+  NatGateway0:
+    Type: AWS::EC2::NatGateway
+    DependsOn: AttachInternetGateway
+    Properties:
+      AllocationId: !GetAtt NatEIP0.AllocationId
+      SubnetId: !Ref PublicSubnet0
+  NatRoute0:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref NatRouteTable0
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway0
+  NatRouteTable0:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join [ '', ['NatRouteTable0 / ', !Ref 'AWS::StackName' ] ]
+        - Key: Network
+          Value: Public
+      VpcId: !Ref webvpc
+
+  NatEIP1:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  NatGateway1:
+    Type: AWS::EC2::NatGateway
+    DependsOn: AttachInternetGateway
+    Properties:
+      AllocationId: !GetAtt NatEIP1.AllocationId
+      SubnetId: !Ref PublicSubnet1
+  NatRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref NatRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway1
+  NatRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join [ '', [ 'NatRouteTable1 / ', !Ref 'AWS::StackName' ] ]
+        - Key: Network
+          Value: Public
+      VpcId: !Ref webvpc
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachInternetGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join [ '', [ 'PublicRouteTable / ', !Ref 'AWS::StackName' ] ]
+        - Key: Network
+          Value: Public
+      VpcId: !Ref webvpc
+  PublicRouteTableAssociation0:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet0
+      RouteTableId: !Ref PublicRouteTable
+  PublicRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable      
+
+  PublicSubnet0:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: "us-west-2a"
+      CidrBlock: 172.31.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnet0
+      VpcId: !Ref webvpc
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: "us-west-2b"
+      CidrBlock: 172.31.3.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnet1
+      VpcId: !Ref webvpc
+  apploadbalancer: 
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Subnets: 
+        - !Ref PublicSubnet0
+        - !Ref PublicSubnet1
+      LoadBalancerAttributes:
+      - Key: idle_timeout.timeout_seconds
+        Value: 60
+      SecurityGroups:
+      - !Ref sgalb
+      Tags:
+      - Key: Name
+        Value: apploadbalancer
+  alblistener:
+    Type : AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Certificates:
+      - CertificateArn: arn:aws:acm:us-west-2:510107092560:certificate/e717c248-accb-4fac-a24d-2c106d83ee1f
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref PublicAlbTargetGroup
+      LoadBalancerArn: !Ref PublicApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+
+Outputs:
+  sgdb:
+    Value: !Ref sgdb
+  sgelasticache:
+    Value: !Ref sgelasticache
+  sgalb:
+    Value: !Ref sgalb
+  sgwebserver:
+    Value: !Ref sgwebserver

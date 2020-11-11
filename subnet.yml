@@ -1,0 +1,187 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: Reference Architecture to host WordPress on AWS - Creates New VPC
+
+Resources:
+  WebSubnet0:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: "us-west-2a"
+      CidrBlock: 172.31.1.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: WebSubnet0-private
+      VpcId: !Ref webvpc
+  WebSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: "us-west-2b"
+      CidrBlock: 172.31.2.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: WebSubnet1-private
+      VpcId: !Ref webvpc
+
+  WebSubnetRouteTableAssociation0:
+    Condition: AZ0
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref NatRouteTable0
+      SubnetId: !Ref WebSubnet0
+  WebSubnetRouteTableAssociation1:
+    Condition: AZ1
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref NatRouteTable1
+      SubnetId: !Ref WebSubnet1
+
+  DataSubnet0:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: "us-west-2a"
+      CidrBlock: 172.31.3.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: DataSubnet0-private
+      VpcId: !Ref webvpc
+  DataSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: "us-west-2b"
+      CidrBlock: 172.31.4.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: DataSubnet1-private
+      VpcId: !Ref webvpc
+
+  DataSubnetRouteTableAssociation0:
+    Condition: AZ0
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref NatRouteTable0
+      SubnetId: !Ref DataSubnet0
+  DataSubnetRouteTableAssociation1:
+    Condition: AZ1
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref NatRouteTable1
+      SubnetId: !Ref DataSubnet1
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join [ '', [ 'InternetGateway / ', !Ref 'AWS::StackName' ] ]
+  AttachInternetGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref webvpc
+
+  NatEIP0:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: !Ref webvpc
+  NatGateway0:
+    Type: AWS::EC2::NatGateway
+    DependsOn: AttachInternetGateway
+    Properties:
+      AllocationId: !GetAtt NatEIP0.AllocationId
+      SubnetId: !Ref PublicSubnet0
+  NatRoute0:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref NatRouteTable0
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway0
+  NatRouteTable0:
+    Condition: AZ0
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join [ '', ['NatRouteTable0 / ', !Ref 'AWS::StackName' ] ]
+        - Key: Network
+          Value: Public
+      VpcId: !Ref webvpc
+
+  NatEIP1:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  NatGateway1:
+    Type: AWS::EC2::NatGateway
+    DependsOn: AttachInternetGateway
+    Properties:
+      AllocationId: !GetAtt NatEIP1.AllocationId
+      SubnetId: !Ref PublicSubnet1
+  NatRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref NatRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway1
+  NatRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join [ '', [ 'NatRouteTable1 / ', !Ref 'AWS::StackName' ] ]
+        - Key: Network
+          Value: Public
+      VpcId: !Ref webvpc
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachInternetGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join [ '', [ 'PublicRouteTable / ', !Ref 'AWS::StackName' ] ]
+        - Key: Network
+          Value: Public
+      VpcId: !Ref webvpc
+  PublicRouteTableAssociation0:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet0
+      RouteTableId: !Ref PublicRouteTable
+  PublicRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable      
+
+  PublicSubnet0:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: "us-west-2a"
+      CidrBlock: 172.31.64.0/20
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnet0
+      VpcId: !Ref Vpc
+  PublicSubnet1:
+    Condition: AZ1
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: "us-west-2b"
+      CidrBlock: 172.31.48.0/20
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnet1
+      VpcId: !Ref Vpc
+
