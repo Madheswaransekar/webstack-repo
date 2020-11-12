@@ -1,0 +1,91 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: This stack is used to provision the VPC and security group for web application stack.
+
+Resources:
+  webvpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 172.31.0.0/22
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: webvpc
+  sgalb:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: sg for public alb
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      VpcId:
+        !Ref webvpc
+      Tags: 
+        - Key: Name
+          Value: sg-alb
+  sgwebserver:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: sg for web instance
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref sgalb
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref sgalb
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+      VpcId:
+        !Ref webvpc
+      Tags: 
+        - Key: Name
+          Value: sg-webserver
+  sgdb:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: sg for DB instance
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref sgwebserver
+      VpcId:
+        !Ref webvpc
+      Tags: 
+        - Key: Name
+          Value: sg-db
+  sgelasticache:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: sg for elastic cache instance
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 11211
+          ToPort: 11211
+          SourceSecurityGroupId: !Ref sgwebserver
+      VpcId:
+        !Ref webvpc
+      Tags: 
+        - Key: Name
+          Value: sg-elasticache
+
+Outputs:
+  sgdb:
+    Value: !Ref sgdb
+  sgelasticache:
+    Value: !Ref sgelasticache
+  sgalb:
+    Value: !Ref sgalb
+  sgwebserver:
+    Value: !Ref sgwebserver

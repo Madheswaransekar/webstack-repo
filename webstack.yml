@@ -1,6 +1,44 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: This stack is used to provision the VPC and security group for web application stack.
 
+Parameters:
+  albacmcert: 
+    Type: String
+    Default: 'arn:aws:acm:us-west-2:510107092560:certificate/e717c248-accb-4fac-a24d-2c106d83ee1f'
+    Description: cert arn
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instances
+    Type: 'AWS::EC2::KeyPair::KeyName'
+  DBPassword:
+    NoEcho: 'true'
+    Description: The WordPress database admin account password
+    Type: String
+    Default: w0rd1ress123
+  DBName:
+    Default: wordpressdb
+    Description: The WordPress database name
+    Type: String
+  DBUser:
+    NoEcho: 'true'
+    Description: The WordPress database admin account username
+    Type: String
+    Default: admin
+  InstanceType:
+    Description: WebServer EC2 instance type
+    Type: String
+    Default: t2.small
+Mappings:
+  AWSInstanceType2Arch:
+    t2.small:
+      Arch: HVM64
+  AWSInstanceType2NATArch:
+    t2.small:
+      Arch: NATHVM64
+  AWSRegionArch2AMI:
+    us-east-1:
+      HVM64: ami-032930428bf1abbff
+      HVMG2: ami-0aeb704d503081ea6
+
 Resources:
   webvpc:
     Type: AWS::EC2::VPC
@@ -82,7 +120,7 @@ Resources:
   WebSubnet0:
     Type: AWS::EC2::Subnet
     Properties:
-      AvailabilityZone: "us-west-2a"
+      AvailabilityZone: "us-east-1a"
       CidrBlock: 172.31.0.0/24
       MapPublicIpOnLaunch: false
       Tags:
@@ -92,7 +130,7 @@ Resources:
   WebSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
-      AvailabilityZone: "us-west-2b"
+      AvailabilityZone: "us-east-1b"
       CidrBlock: 172.31.1.0/24
       MapPublicIpOnLaunch: false
       Tags:
@@ -205,7 +243,7 @@ Resources:
   PublicSubnet0:
     Type: AWS::EC2::Subnet
     Properties:
-      AvailabilityZone: "us-west-2a"
+      AvailabilityZone: "us-east-1a"
       CidrBlock: 172.31.2.0/24
       MapPublicIpOnLaunch: true
       Tags:
@@ -215,7 +253,7 @@ Resources:
   PublicSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
-      AvailabilityZone: "us-west-2b"
+      AvailabilityZone: "us-east-1b"
       CidrBlock: 172.31.3.0/24
       MapPublicIpOnLaunch: true
       Tags:
@@ -240,14 +278,235 @@ Resources:
   alblistener:
     Type : AWS::ElasticLoadBalancingV2::Listener
     Properties:
-      Certificates:
-      - CertificateArn: arn:aws:acm:us-west-2:510107092560:certificate/e717c248-accb-4fac-a24d-2c106d83ee1f
+      #Certificates:
+        #- CertificateArn: !Ref albacmcert
       DefaultActions:
       - Type: forward
-        TargetGroupArn: !Ref PublicAlbTargetGroup
-      LoadBalancerArn: !Ref PublicApplicationLoadBalancer
-      Port: 443
-      Protocol: HTTPS
+        TargetGroupArn: !Ref albtargetgroup
+      LoadBalancerArn: !Ref apploadbalancer
+      Port: 80
+      Protocol: HTTP
+  albtargetgroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: /wordpress/wp-admin/install.php
+      HealthCheckTimeoutSeconds: 5
+      Port: 80
+      Protocol: HTTP
+      Tags:
+      - Key: Name
+        Value: albtargetgroup
+      UnhealthyThresholdCount: 5
+      VpcId: !Ref webvpc
+  WebServerGroup:
+    Type: 'AWS::AutoScaling::AutoScalingGroup'
+    Properties:
+      VPCZoneIdentifier: 
+        - !Ref WebSubnet0
+        - !Ref WebSubnet1
+      LaunchConfigurationName: !Ref LaunchConfig
+      MinSize: '1'
+      MaxSize: '5'
+      DesiredCapacity: 1
+      TargetGroupARNs:
+        - !Ref albtargetgroup
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: '1'
+        MaxBatchSize: '1'
+        PauseTime: PT15M
+        WaitOnResourceSignals: 'true'
+  LaunchConfig:
+    Type: 'AWS::AutoScaling::LaunchConfiguration'
+    Metadata:
+      'AWS::CloudFormation::Init':
+        configSets:
+          wordpress_install:
+            - install_cfn
+            - install_wordpress
+        install_cfn:
+          files:
+            /etc/cfn/cfn-hup.conf:
+              content: !Join 
+                - ''
+                - - |
+                    [main]
+                  - stack=
+                  - !Ref 'AWS::StackId'
+                  - |+
+
+                  - region=
+                  - !Ref 'AWS::Region'
+                  - |+
+
+              mode: '000400'
+              owner: root
+              group: root
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content: !Join 
+                - ''
+                - - |
+                    [cfn-auto-reloader-hook]
+                  - |
+                    triggers=post.update
+                  - >
+                    path=Resources.LaunchConfig.Metadata.AWS::CloudFormation::Init
+                  - 'action=/opt/aws/bin/cfn-init -v '
+                  - '         --stack '
+                  - !Ref 'AWS::StackName'
+                  - '         --resource LaunchConfig '
+                  - '         --configsets wordpress_install '
+                  - '         --region '
+                  - !Ref 'AWS::Region'
+                  - |+
+
+              mode: '000400'
+              owner: root
+              group: root
+          services:
+            sysvinit:
+              cfn-hup:
+                enabled: 'true'
+                ensureRunning: 'true'
+                files:
+                  - /etc/cfn/cfn-hup.conf
+                  - /etc/cfn/hooks.d/cfn-auto-reloader.conf
+        install_wordpress:
+          packages:
+            yum:
+              php73: []
+              php73-mysqlnd: []
+              mysql57: []
+              httpd24: []
+          sources:
+            /var/www/html: 'http://wordpress.org/latest.tar.gz'
+          files:
+            /tmp/create-wp-config:
+              content: !Join 
+                - ''
+                - - |
+                    #!/bin/bash
+                  - >
+                    cp /var/www/html/wordpress/wp-config-sample.php
+                    /var/www/html/wordpress/wp-config.php
+                  - sed -i "s/'database_name_here'/'
+                  - !Ref DBName
+                  - |
+                    '/g" wp-config.php
+                  - sed -i "s/'username_here'/'
+                  - !Ref DBUser
+                  - |
+                    '/g" wp-config.php
+                  - sed -i "s/'password_here'/'
+                  - !Ref DBPassword
+                  - |
+                    '/g" wp-config.php
+                  - sed -i "s/'localhost'/'
+                  - !GetAtt 
+                    - DBInstance
+                    - Endpoint.Address
+                  - |
+                    '/g" wp-config.php
+              mode: '000500'
+              owner: root
+              group: root
+          commands:
+            01_configure_wordpress:
+              command: /tmp/create-wp-config
+              cwd: /var/www/html/wordpress
+          services:
+            sysvinit:
+              httpd:
+                enabled: 'true'
+                ensureRunning: 'true'
+    Properties:
+      ImageId: !FindInMap 
+        - AWSRegionArch2AMI
+        - !Ref 'AWS::Region'
+        - !FindInMap 
+          - AWSInstanceType2Arch
+          - !Ref InstanceType
+          - Arch
+      InstanceType: !Ref InstanceType
+      SecurityGroups:
+        - !Ref sgwebserver
+      KeyName: !Ref KeyName
+      UserData: !Base64 
+        'Fn::Join':
+          - ''
+          - - |
+              #!/bin/bash -xe
+            - |
+              yum update -y aws-cfn-bootstrap
+            - '/opt/aws/bin/cfn-init -v '
+            - '         --stack '
+            - !Ref 'AWS::StackName'
+            - '         --resource LaunchConfig '
+            - '         --configsets wordpress_install '
+            - '         --region '
+            - !Ref 'AWS::Region'
+            - |+
+
+            - '/opt/aws/bin/cfn-signal -e $? '
+            - '         --stack '
+            - !Ref 'AWS::StackName'
+            - '         --resource WebServerGroup '
+            - '         --region '
+            - !Ref 'AWS::Region'
+            - |+
+
+  #DBEC2SecurityGroup:
+    #Type: 'AWS::EC2::SecurityGroup'
+    #Properties:
+     # GroupDescription: Open database for access
+      #SecurityGroupIngress:
+       # - IpProtocol: tcp
+        #  FromPort: '3306'
+         # ToPort: '3306'
+          #SourceSecurityGroupId: !Ref WebServerSecurityGroup
+      #VpcId: !Ref webvpc
+
+  DBInstance:
+    Type: 'AWS::RDS::DBInstance'
+    Properties:
+      DBName: !Ref DBName
+      Engine: MySQL
+      MultiAZ: false
+      MasterUsername: !Ref DBUser
+      MasterUserPassword: !Ref DBPassword
+      DBInstanceClass: db.t2.small
+      AllocatedStorage: 5
+      #VPCSecurityGroups: 
+        #- !GetAtt 
+          #- sgdb
+          #- GroupId
+  
+  ElastiCacheCluster:
+    Type: AWS::ElastiCache::CacheCluster
+    Properties:
+      AZMode: single-az
+      CacheNodeType: cache.t2.small
+      CacheSubnetGroupName: !Ref ElastiCacheSubnetGroup
+      Engine: redis
+      EngineVersion: 3.2.4
+      NumCacheNodes: 1
+      Tags:
+        - Key: Name
+          Value: ElastiCacheCluster
+      VpcSecurityGroupIds:
+      - !Ref sgelasticache
+
+  ElastiCacheSubnetGroup: 
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties: 
+      Description: ElastiCache Subnet Group for WordPress
+      SubnetIds: 
+        - !Ref WebSubnet0
+        - !Ref WebSubnet1
 
 Outputs:
   sgdb:
@@ -258,3 +517,22 @@ Outputs:
     Value: !Ref sgalb
   sgwebserver:
     Value: !Ref sgwebserver
+  apploadbalancer:
+    Value: !Ref apploadbalancer
+  albtargetgroup:
+    Value: !Ref albtargetgroup
+  WebServerGroup:
+    Value: !Ref WebServerGroup
+  DBInstance:
+    Value: !Ref DBInstance
+  ElastiCacheCluster:
+    Value: !Ref ElastiCacheCluster
+  WebsiteURL:
+        Value: !Join 
+          - ''
+          - - 'http://'
+            - !GetAtt 
+              - apploadbalancer
+              - DNSName
+            - /wordpress
+        Description: WordPress Website
